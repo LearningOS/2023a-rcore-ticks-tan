@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::config::MAX_APP_NUM;
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
@@ -22,6 +23,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::timer::get_time;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -54,6 +56,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_tick: 0,
+            task_syscall_count: [0; MAX_SYSCALL_NUM]
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -81,6 +85,8 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        task0.task_tick = get_time();
+        println!("run first task!");
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -125,6 +131,9 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            if inner.tasks[next].task_tick == 0 {
+                inner.tasks[next].task_tick = get_time();
+            }
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -134,6 +143,30 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// 获取当前任务开始运行时间
+    fn get_current_tick(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_tick
+    }
+
+    /// 为当前任务添加syscall计数
+    fn inc_current_task_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_count[syscall_id] += 1;
+    }
+    /// 获取当前任务syscall计数
+    fn get_current_task_syscall_count(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut syscall_nums = [0; MAX_SYSCALL_NUM];
+        syscall_nums.iter_mut().enumerate().for_each(|(i, v)| {
+            *v = inner.tasks[current].task_syscall_count[i]
+        });
+        syscall_nums
     }
 }
 
@@ -168,4 +201,19 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// 获取当前任务开始运行时间
+pub fn get_current_task_tick() -> usize {
+    TASK_MANAGER.get_current_tick()
+}
+
+/// 增加当前任务syscall调用次数
+pub fn inc_current_task_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.inc_current_task_syscall_count(syscall_id);
+}
+
+/// 获取当前任务syscall调用次数
+pub fn get_current_task_syscall_count() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_current_task_syscall_count()
 }
