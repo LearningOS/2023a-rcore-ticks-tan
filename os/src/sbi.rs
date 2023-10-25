@@ -36,7 +36,7 @@ pub fn console_putchar(c: usize) {
 /// use sbi call to shutdown the kernel
 pub fn shutdown() -> ! {
     sbi_call(SBI_SHUTDOWN, 0, 0, 0);
-    loop {
-    }
-    // panic!("It should shutdown!");
+    // loop {
+    // }
+    panic!("It should shutdown!");
 }
